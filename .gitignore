@@ -1,0 +1,25 @@
+# Antigravity agent files
+.antigravity/
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Production builds
+dist/
+**/dist/
+
+# Environments & secrets
+.env
+.env.local
+.env.*.local
+**/backend/.env
+
+# Log files
+*.log
+backend/*.log
+backend/market_data_dump.json
+
+# System files
+.DS_Store
+Thumbs.db
