@@ -11,7 +11,7 @@ export function useMarketData() {
 
     function connect() {
       const host = window.location.hostname || 'localhost';
-      const wsUrl = `ws://${host}:5000`;
+      const wsUrl = import.meta.env.VITE_WS_URL || `ws://${host}:5000`;
       
       console.log(`Connecting to WebSocket at ${wsUrl}...`);
       ws = new WebSocket(wsUrl);

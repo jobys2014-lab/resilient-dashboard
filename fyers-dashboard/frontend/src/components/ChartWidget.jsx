@@ -8,6 +8,8 @@ const ChartWidget = ({ data, timeframe, orbHigh, orbLow }) => {
   const orbHighLineRef = useRef();
   const orbLowLineRef = useRef();
 
+  const hasFittedRef = useRef(false);
+
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
@@ -49,6 +51,7 @@ const ChartWidget = ({ data, timeframe, orbHigh, orbLow }) => {
     if (data && data.length > 0) {
       candlestickSeries.setData(data);
       chart.timeScale().fitContent();
+      hasFittedRef.current = true;
     }
 
     const handleResize = () => {
@@ -66,6 +69,10 @@ const ChartWidget = ({ data, timeframe, orbHigh, orbLow }) => {
       chart.remove();
     };
   }, []);
+
+  useEffect(() => {
+    hasFittedRef.current = false;
+  }, [timeframe]);
 
   useEffect(() => {
     if (seriesRef.current && data && data.length > 0) {
@@ -95,6 +102,11 @@ const ChartWidget = ({ data, timeframe, orbHigh, orbLow }) => {
         }
         
         seriesRef.current.setData(resampledData);
+
+        if (!hasFittedRef.current && chartRef.current) {
+          chartRef.current.timeScale().fitContent();
+          hasFittedRef.current = true;
+        }
     }
   }, [data, timeframe]);
 

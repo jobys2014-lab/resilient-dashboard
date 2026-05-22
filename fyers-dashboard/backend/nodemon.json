@@ -1,0 +1,10 @@
+{
+  "verbose": true,
+  "ignore": [
+    "*.log",
+    "*.json",
+    "node_modules/",
+    ".git/"
+  ],
+  "ext": "js,mjs,cjs"
+}

@@ -2,6 +2,13 @@ import { WebSocketServer } from 'ws';
 import { runScanner } from './scanner.js';
 import axios from 'axios';
 import { getChartinkSymbols } from './chartink.js';
+import { 
+  calculateEMA, 
+  calculateRSI, 
+  calculateMACD, 
+  calculateBollingerBands, 
+  calculateParabolicSAR 
+} from './indicators.js';
 
 let YAHOO_SYMBOLS = [];
 let SYMBOLS_STRING = '';
@@ -117,18 +124,18 @@ const calculateORB = (history) => {
   
   // Find the date of the last candle
   const lastCandle = history[history.length - 1];
-  const lastCandleParts = getISTTimeParts(lastCandle.time - 19800); // strip timezone adjustment for math
+  const lastCandleParts = getISTTimeParts(lastCandle.time);
   const latestDateStr = lastCandleParts.dateStr;
   
   // Filter candles of the same day
   const dayCandles = history.filter(c => {
-    const parts = getISTTimeParts(c.time - 19800);
+    const parts = getISTTimeParts(c.time);
     return parts.dateStr === latestDateStr;
   });
   
   // Filter for ORB range (9:15 to 10:00 IST)
   const orbCandles = dayCandles.filter(c => {
-    const parts = getISTTimeParts(c.time - 19800);
+    const parts = getISTTimeParts(c.time);
     return (parts.hour === 9 && parts.minute >= 15) || (parts.hour === 10 && parts.minute === 0);
   });
   
@@ -138,12 +145,12 @@ const calculateORB = (history) => {
     return { orbHigh: high, orbLow: low };
   } else {
     // If no candles exist for today's ORB yet (e.g. before 9:15 AM), check the previous session
-    const dates = [...new Set(history.map(c => getISTTimeParts(c.time - 19800).dateStr))];
+    const dates = [...new Set(history.map(c => getISTTimeParts(c.time).dateStr))];
     if (dates.length > 1) {
       const prevDateStr = dates[dates.length - 2];
-      const prevDayCandles = history.filter(c => getISTTimeParts(c.time - 19800).dateStr === prevDateStr);
+      const prevDayCandles = history.filter(c => getISTTimeParts(c.time).dateStr === prevDateStr);
       const prevOrbCandles = prevDayCandles.filter(c => {
-        const parts = getISTTimeParts(c.time - 19800);
+        const parts = getISTTimeParts(c.time);
         return (parts.hour === 9 && parts.minute >= 15) || (parts.hour === 10 && parts.minute === 0);
       });
       if (prevOrbCandles.length > 0) {
@@ -155,6 +162,62 @@ const calculateORB = (history) => {
     }
   }
   return { orbHigh: lastCandle.close * 1.01, orbLow: lastCandle.close * 0.99 };
+};
+
+// Calculate and assign actual indicators based on historical candle data
+const updateIndicators = (stock) => {
+  const history = stock.history;
+  if (!history || history.length < 20) return;
+
+  const lastIdx = history.length - 1;
+  const currentPrice = stock.currentPrice;
+
+  // Make sure we include current price in the last candle for real-time calculations
+  const calcHistory = [...history];
+  calcHistory[lastIdx] = {
+    ...calcHistory[lastIdx],
+    close: currentPrice,
+    high: Math.max(calcHistory[lastIdx].high, currentPrice),
+    low: Math.min(calcHistory[lastIdx].low, currentPrice)
+  };
+
+  const ema20 = calculateEMA(calcHistory, 20);
+  const rsiVal = calculateRSI(calcHistory, 14);
+  const macdVal = calculateMACD(calcHistory, 12, 26, 9);
+  const bbVal = calculateBollingerBands(calcHistory, 20, 2);
+  const psarVal = calculateParabolicSAR(calcHistory);
+
+  const lastEma = ema20[lastIdx] || currentPrice;
+  const lastRsi = rsiVal[lastIdx] || 50;
+  const lastMacdObj = macdVal[lastIdx] || { macd: '0.00' };
+  const lastBbObj = bbVal[lastIdx] || { upper: currentPrice * 1.02, lower: currentPrice * 0.98 };
+  const lastPsar = psarVal[lastIdx] || currentPrice * 0.98;
+
+  if (!stock.indicators) stock.indicators = {};
+  stock.indicators.emaCross = currentPrice >= lastEma ? 'BULLISH' : 'BEARISH';
+  stock.indicators.rsi = lastRsi;
+  stock.indicators.macd = lastMacdObj.macd;
+  stock.indicators.bbUpper = lastBbObj.upper || currentPrice * 1.02;
+  stock.indicators.psar = lastPsar;
+
+  // Technical Scoring
+  let score = 50;
+  if (lastRsi > 50 && lastRsi <= 70) score += 15;
+  else if (lastRsi > 70) score += 5;
+  else if (lastRsi < 50 && lastRsi >= 30) score -= 15;
+  else if (lastRsi < 30) score -= 5;
+
+  if (parseFloat(lastMacdObj.macd) > 0) score += 15;
+  else score -= 15;
+
+  if (currentPrice > lastEma) score += 10;
+  else score -= 10;
+
+  if (currentPrice > (lastBbObj.upper || 0)) score -= 10;
+  else if (currentPrice < (lastBbObj.lower || currentPrice)) score += 10;
+
+  stock.buyProbability = Math.min(95, Math.max(5, Math.round(score)));
+  stock.sellProbability = 100 - stock.buyProbability;
 };
 
 export const setupWebSocket = async (server) => {
@@ -214,8 +277,8 @@ export const setupWebSocket = async (server) => {
             for (let j = 0; j < timestamps.length; j++) {
               if (quote.open[j] === null) continue;
               const open = quote.open[j], high = quote.high[j], low = quote.low[j], close = quote.close[j], vol = quote.volume[j] || 0;
-              // Add 19800 seconds (5 hours 30 mins) to convert UTC to IST for lightweight-charts
-              history.push({ time: timestamps[j] + 19800, open, high, low, close });
+              // Pure UNIX timestamps (no timezone manual additions, client handles display offsets)
+              history.push({ time: timestamps[j], open, high, low, close });
               
               vwapSum += (high + low + close) / 3 * vol;
               volSum += vol;
@@ -237,7 +300,7 @@ export const setupWebSocket = async (server) => {
               const change = (Math.random() - 0.5) * (realOpen * 0.002);
               priceCursor = Math.max(realOpen * 0.9, Math.min(realOpen * 1.1, priceCursor + change));
               history.push({
-                time: timeCursor + 19800,
+                time: timeCursor,
                 open: prev,
                 high: Math.max(prev, priceCursor) + (Math.random() * (realOpen * 0.0005)),
                 low: Math.min(prev, priceCursor) - (Math.random() * (realOpen * 0.0005)),
@@ -253,21 +316,8 @@ export const setupWebSocket = async (server) => {
           lastMarketData[stockIndex].orbHigh = orb.orbHigh;
           lastMarketData[stockIndex].orbLow = orb.orbLow;
 
-          // Align indicators realistically
-          const changePct = parseFloat(lastMarketData[stockIndex].priceChangePercent);
-          const isUp = changePct >= 0;
-          lastMarketData[stockIndex].indicators.rsi = Math.floor(isUp ? 55 + (Math.random() * 20) : 45 - (Math.random() * 20));
-          lastMarketData[stockIndex].indicators.emaCross = isUp ? 'BULLISH' : 'BEARISH';
-          lastMarketData[stockIndex].indicators.macd = (isUp ? (Math.random() * 1.5).toFixed(2) : -(Math.random() * 1.5).toFixed(2));
-          lastMarketData[stockIndex].indicators.bbUpper = (meta.regularMarketPrice * (1 + (Math.random() * 0.015 + 0.005))).toFixed(2);
-          lastMarketData[stockIndex].indicators.psar = (isUp ? meta.regularMarketPrice * (1 - (Math.random() * 0.01 + 0.003)) : meta.regularMarketPrice * (1 + (Math.random() * 0.01 + 0.003))).toFixed(2);
-          
-          let score = 50;
-          if (lastMarketData[stockIndex].indicators.rsi > 55) score += 15; else if (lastMarketData[stockIndex].indicators.rsi < 45) score -= 15;
-          if (parseFloat(lastMarketData[stockIndex].indicators.macd) > 0) score += 15; else score -= 15;
-          if (isUp) score += 10; else score -= 10;
-          lastMarketData[stockIndex].buyProbability = Math.min(95, Math.max(5, Math.round(score)));
-          lastMarketData[stockIndex].sellProbability = 100 - lastMarketData[stockIndex].buyProbability;
+          // Calculate real technical indicators from loaded history
+          updateIndicators(lastMarketData[stockIndex]);
 
           lastMarketData[stockIndex].isRealDataInitialized = true;
         }
@@ -323,6 +373,9 @@ export const setupWebSocket = async (server) => {
           if (meta.regularMarketVolume) {
             stock.indicators.volume = (meta.regularMarketVolume / 1000).toFixed(1) + 'K';
           }
+
+          // Recalculate indicators with updated round robin price
+          updateIndicators(stock);
         }
       }
     } catch (err) {
@@ -353,25 +406,13 @@ export const setupWebSocket = async (server) => {
         lastCandle.low = Math.min(lastCandle.low, stock.currentPrice);
       }
       
-      // Jitter indicators slightly to show activity
-      if (stock.indicators) {
-        stock.indicators.rsi = Math.min(90, Math.max(10, stock.indicators.rsi + (Math.random() - 0.5) * 0.4));
-        stock.indicators.macd = (parseFloat(stock.indicators.macd) + (Math.random() - 0.5) * 0.02).toFixed(2);
-        stock.indicators.bbUpper = (stock.currentPrice * (1 + (Math.random() * 0.01 + 0.003))).toFixed(2);
-        stock.indicators.psar = (changePct > 0 ? stock.currentPrice * (0.99) : stock.currentPrice * (1.01)).toFixed(2);
-      }
+      // Calculate real technical indicators on every tick
+      updateIndicators(stock);
 
       if (!isIndex) {
         stock.oldOiChangePercent = stock.oiChangePercent;
         stock.oiChangePercent = (parseFloat(stock.oiChangePercent) + (Math.random() - 0.5) * 0.2).toFixed(2);
         stock.volumeBurst = Math.max(0.1, (parseFloat(stock.volumeBurst) + (Math.random() - 0.5) * 0.1)).toFixed(1);
-        
-        let score = 50;
-        if (stock.indicators.rsi > 55) score += 10; else if (stock.indicators.rsi < 45) score -= 10;
-        if (parseFloat(stock.indicators.macd) > 0) score += 10; else score -= 10;
-        if (changePct > 0) score += 10; else score -= 10;
-        stock.buyProbability = Math.min(95, Math.max(5, Math.round(score)));
-        stock.sellProbability = 100 - stock.buyProbability;
       }
     });
     
@@ -388,3 +429,4 @@ export const setupWebSocket = async (server) => {
     });
   }, 1000);
 };
+
