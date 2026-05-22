@@ -412,7 +412,16 @@ export const setupWebSocket = async (server) => {
       if (!isIndex) {
         stock.oldOiChangePercent = stock.oiChangePercent;
         stock.oiChangePercent = (parseFloat(stock.oiChangePercent) + (Math.random() - 0.5) * 0.2).toFixed(2);
-        stock.volumeBurst = Math.max(0.1, (parseFloat(stock.volumeBurst) + (Math.random() - 0.5) * 0.1)).toFixed(1);
+      }
+      
+      // Simulate realistic volume bursts (occasional spikes, decay back to 1.0 baseline)
+      const currentBurst = parseFloat(stock.volumeBurst) || 1.0;
+      if (Math.random() < 0.05) {
+        // 5% chance of a sudden volume surge (between 1.5x and 3.0x average volume)
+        stock.volumeBurst = (1.5 + Math.random() * 1.5).toFixed(1);
+      } else {
+        // Decays back to 1.0 baseline with slight jitter
+        stock.volumeBurst = Math.max(0.1, (currentBurst + (1.0 - currentBurst) * 0.15 + (Math.random() - 0.5) * 0.08)).toFixed(1);
       }
     });
     

@@ -22,15 +22,12 @@ export const runScanner = (stockData, sectorData) => {
     const change1h = ((prevClose - prior1hClose) / prior1hClose) * 100;
     
     // 1. REVERSAL (Chartink: 45m drop, 1h recovery)
-    // If the stock was natively returned by the Chartink screener, trust it automatically!
-    // Otherwise, check via Yahoo Finance data proxy
     const cond1 = change45m > -3 && change45m < 0;
     const cond2 = change1h > 0.1 && change1h < 2;
     const cond3 = currentPrice > 200;
-    const isReversal = stock.isChartink || (cond1 && cond2 && cond3);
 
     // 2. MOMENTUM (Strong short-term price & volume surge)
-    const isMomentum = change1h > 0.5 && parseFloat(stock.volumeBurst) > 1.5;
+    const isMomentum = change1h > 0.3 && parseFloat(stock.volumeBurst) > 1.3;
 
     // 3. R-TRADE (Price > EMA20, Price < VWAP, Vol > AvgVol)
     let sum = 0;
@@ -42,14 +39,19 @@ export const runScanner = (stockData, sectorData) => {
     const volAboveAvg = parseFloat(stock.volumeBurst) > 1.0;
     const isRTrade = currentPrice > sma20 && currentPrice < vwap && volAboveAvg;
 
-    let status = null;
-    if (isReversal) status = stock.isChartink ? 'CHARTINK' : 'REVERSAL';
-    else if (isRTrade) status = 'R-TRADE';
-    else if (isMomentum) status = 'MOMENTUM';
+    const statuses = [];
+    if (stock.isChartink) {
+      statuses.push('CHARTINK');
+    } else if (cond1 && cond2 && cond3) {
+      statuses.push('REVERSAL');
+    }
     
-    if (status) {
+    if (isRTrade) statuses.push('R-TRADE');
+    if (isMomentum) statuses.push('MOMENTUM');
+    
+    statuses.forEach(status => {
       alerts.push({ 
-        id: `alert-${symbol}-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+        id: `alert-${symbol}-${status}-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
         symbol, 
         dropPercent: change45m || -0.5, 
         currentChange: change1h || parseFloat(stock.priceChangePercent), 
@@ -59,7 +61,7 @@ export const runScanner = (stockData, sectorData) => {
         vwapReclaimed: currentPrice > vwap,
         volumeBurst: parseFloat(stock.volumeBurst)
       });
-    }
+    });
   }
   
   // Fallback: If no stocks meet the exact criteria, grab the top 3 volume burst stocks
